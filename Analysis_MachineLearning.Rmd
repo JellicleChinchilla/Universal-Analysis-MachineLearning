@@ -1,0 +1,1190 @@
+---
+title: "SID510407902_Assignment"
+author: "510407902"
+date: "2023-03-10"
+output:
+  html_document:
+    code_folding: show
+    theme: united
+    mathjax: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import Libraries
+```{r, message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(class)
+library(cvTools)
+library(randomForest)
+library(GEOquery) 
+library(R.utils)
+library(reshape2)
+library(limma)
+library(tuneR)
+library(devtools)
+library(ggplot2)
+library(tsfeatures)
+library(sf)
+library(plotly)
+library(DT)
+library(e1071)
+library(caret)
+library(seewave)
+```
+
+# Question 1 - Case Study 1 (Reef): Visualising data
+## Initial Data Analysising
+```{r, results='hide'}
+
+# Import the CSV Data
+df_reef <- read.csv("Reef_Check_with_cortad_variables_with_annual_rate_of_SST_change.csv")
+
+dim(df_reef)
+head(df_reef)
+
+print(distinct_countries <- df_reef %>% distinct(Country) %>% nrow())
+
+```
+
+## a. In the paper, the authors claim “the highest probability of coral bleaching occurred at tropical midlatitude sites (15–20 degrees north and south of the Equator)”. Create an informative map visualisation to explore this claim and comment on what you can learn from your visualisation.
+```{r}
+
+# Convert the data-frame to an sf object
+sf <- st_as_sf(df_reef, coords = c("Longitude.Degrees", "Latitude.Degrees"), crs = 4326)
+
+# Spatial Plot
+ggplot(sf) +
+  geom_sf(aes(color = Average_bleaching, size = Average_bleaching)) +
+  scale_color_gradient(low = "blue", high = "red") +
+  labs(title = "Spatial Plot with Average Bleaching")
+
+# Geo-Spatial Plot
+
+world_map <- map_data("world")
+
+p <- ggplot() + geom_polygon(data = world_map, aes(x = long, y = lat, group = group),
+    fill = "grey", alpha = 0.3) + geom_point(data = df_reef, alpha = 0.2, aes(y = Latitude.Degrees,
+    x = Longitude.Degrees, size = Average_bleaching, color = Average_bleaching)) + ggtitle("Geo-Spatial Plot with Average Bleaching") + scale_color_gradient(low = "blue", high = "red") + theme_minimal()
+
+p
+```
+
+    In the geo-spatial plot above, both the sizes and colors represent the Average Bleaching of specific geo-positions. The larger the dot, the higher the Average Bleaching, while the color scale, ranging from blue to red, indicates increasing levels of Average Bleaching.
+    From the geo-spatial plot, we can observe the trend of coral bleaching. The plot indicates that the highest probability of coral bleaching occurred at tropical mid-latitude sites. Based on our geo-spatial plot, we can see that most of the "large red dots" are distributed between 10–25 degrees north and south of the Equator. The paper claims that the highest probability of coral bleaching is between 15-20 degrees, and this interval is included in the range we observed from the plot. Therefore, the claim is supported by our findings.
+
+## b. A researcher wants to investigate coral bleaching events around the world as they occurred from 1998 to 2017. Create an interactive map visualisation, representing the information you think would be important. Justify your choice of visualisation, and comment on what you can learn from your visualisation.
+```{r}
+# Filter the data-set by the Average bleaching
+
+bleach <- df_reef %>% filter(Average_bleaching > 0)
+dim(bleach)
+
+non_bleach <- df_reef %>% filter(Average_bleaching == 0)
+dim(non_bleach)
+
+p <- ggplot(bleach, aes(x=Average_bleaching, y=Year)) + geom_boxplot(aes(group=Year)) + ggtitle("The trend of Average Bleaching vary between 1998 to 2017")
+p
+
+```
+
+    Boxplot of Years Versus Average Bleaching shows the average bleaching in different years. A trend of increasing average bleaching by year is indicated by the amount of maximum outliers. There are more maximum outliers in recent years than in previous years. 2017 seems like an exceptional case, probably due to a lack of data from that year. The median values and standard deviation of average bleaching are not too meaningful because there are too many outliers.
+
+```{r}
+p <- ggplot(bleach, aes(x=Temperature_Mean, y=Year)) + geom_boxplot(aes(group=Year)) + ggtitle("The trend of Average Temperature of bleached location vary between 1998 to 2017")
+p
+```
+
+    The Boxplot of Years versus Average Temperature shows that the average temperature of the bleached locations did not change over time. There is no clear trend indicating whether the average temperature increased or decreased over time. Therefore, it would be better to further investigate the relationship between Average Bleaching and Average Temperature to gain more insightful information
+
+```{r}
+world_map <- map_data("world")
+
+p <- ggplot() + geom_polygon(data = world_map, aes(x = long, y = lat, group = group),
+    fill = "grey", alpha = 0.3) + geom_point(data = df_reef, alpha = 0.2, aes(y = Latitude.Degrees,
+    x = Longitude.Degrees, size = Average_bleaching, color = Temperature_Mean)) + ggtitle("Average Bleaching with Average Temperature") + scale_color_gradient(low = "pink", high = "red") + theme_minimal()
+
+ggplotly(p)
+```
+    
+    The interactive geo-spatial plot above shows that the color scale indicates the Average Temperature, with pink representing the lowest and red representing the highest levels. The dot size represents the Average Bleaching, with larger dots indicating higher Average Bleaching. From this interactive graph, certain trends can be observed, with locations that have higher average temperature showing higher average bleaching. However, the plot can only present rough trends. If we want to explore the effective impact of temperature on Average Bleaching in more depth, we need further analytical methods, such as linear regression models. Relying solely on visualization is not sufficient.
+
+
+# Question 2 - Case Study 2 (Kidney): Blood vs Biopsy Biomarker for classification
+```{r, results='hide'}
+load("./GSE46474.RData")
+gse
+
+head(pData(gse)[,1:5]) # Patient Data (Observations)
+head(fData(gse)[,1:5]) # Feature Data (Genes)
+head(exprs(gse)[,1:5])
+df_blood_wide = exprs(gse)
+head(df_blood_wide)
+dim(df_blood_wide)
+
+df_blood <- as.data.frame(gse)
+
+# Add the targeted feature "Outcome" to the dataframe
+df_blood$Outcome <- ifelse(grepl("AR", gse$title), "Rejection", "Stable")
+
+# Encode the binary Outcome into 1 and 0, with 1 represents Rejection, 0 represents Stable
+df_blood$Outcome <- ifelse(df_blood$Outcome == "Rejection", 1, 0)
+
+# 1 and 0 representations should be descrete
+df_blood$Outcome <- as.factor(df_blood$Outcome)
+```
+
+## a. In each of the GSE46474 and GSE138043 datasets, use the topTable function in the limma package to output the most differentially expressed genes between patients that experience graft rejection and stable patients. Which genes are overlapped between the top 300 differentially expressed genes for each dataset? In other words, which genes can be found in the top 300 differentially expressed genes for BOTH datasets?
+```{r, message=FALSE}
+gse$Outcome <- ifelse(grepl("AR", gse$title), "Rejection", "Stable")
+table(gse$Outcome)
+
+design <- model.matrix(~Outcome, data = pData(gse))
+fit <- lmFit(exprs(gse), design)
+fit <- eBayes(fit)
+
+tT <- topTable(fit, n = Inf)
+DT::datatable(round(tT[1:300, ], 2))
+
+featureData <- fData(gse) # GSE contain a featuredata slot that contains information about the genes that were sampled. 
+colnames(featureData)
+
+blood_300 <- topTable(fit, n = 300, genelist = rownames(gse))
+blood_300 <- merge(x=blood_300, y=featureData, by="ID", all.x=TRUE)
+#head(blood_300)
+```
+
+```{r, results='hide'}
+load("./GSE138043.RData")
+gse
+
+head(pData(gse)[,1:5]) # Patient Data (Observations)
+head(fData(gse)[,1:5]) # Feature Data (Genes)
+head(exprs(gse)[,1:5])
+df_biopsy_wide = exprs(gse)
+head(df_biopsy_wide)
+dim(df_biopsy_wide)
+
+df_biopsy <- as.data.frame(gse)
+df_biopsy$Outcome <- ifelse(grepl("non", gse$characteristics_ch1), "Stable", "Rejection")
+df_biopsy$Outcome <- ifelse(df_biopsy$Outcome == "Rejection", 1, 0)
+df_biopsy$Outcome <- as.factor(df_biopsy$Outcome)
+```
+
+```{r, message=FALSE}
+gse$Outcome <- ifelse(grepl("non-AR", gse$characteristics_ch1), "Stable", "Rejection")
+table(gse$Outcome)
+
+design <- model.matrix(~Outcome, data = pData(gse))
+fit <- lmFit(exprs(gse), design)
+fit <- eBayes(fit)
+
+tT <- topTable(fit, n = Inf) 
+DT::datatable(round(tT[1:300, ], 2))
+
+featureData <- fData(gse) 
+colnames(featureData)
+
+biopsy_300 <- topTable(fit, n = 300, genelist = rownames(gse))
+biopsy_300 <- merge(x=biopsy_300, y=featureData, by="ID", all.x=TRUE)
+#head(biopsy_300)
+```
+
+```{r, echo=FALSE, results='hide'}
+biopsy_300$gene_assignment <- str_extract(biopsy_300$gene_assignment, "(?<=//)(.*?)(?=/)")
+biopsy_300$gene_assignment <- trimws(biopsy_300$gene_assignment)
+
+#common_gene <- blood_300$`Gene Symbol` %in% biopsy_300$`gene_assignment`
+common_gene <- intersect(blood_300$`Gene Symbol`, biopsy_300$gene_assignment)
+
+common_gene
+```
+
+    By merging the dataframes and their corresponding feature data using a common variable "ID," we can access the feature symbols. To preprocess the gene symbols' format in the biopsy dataframe, we need to extract the strings between the first "//" and the second "//" and remove the spaces at both ends. Once we correctly reformat the biopsy dataframe, we can identify the overlapping gene symbols in both the blood and biopsy dataframes.
+    
+    There are 3 common variables in both top 300 differential tables of blood and biopsy database, which are "SLAMF6", "RASA3", "ITGAX".
+
+## b. Consider the following framework for cross-validation for a support vector machine (SVM) classifier.
+
+```{r, warning=FALSE}
+
+# Calculate variances for each numerical variable
+blood_variances <- apply(df_blood[, -which(names(df_blood) == "Outcome")], 2, var, na.rm = TRUE)
+biopsy_variances <- apply(df_biopsy[, -which(names(df_biopsy) == "Outcome")], 2, var, na.rm = TRUE)
+
+# Sort variables by variance in descending order
+sorted_blood_variances <- sort(blood_variances, decreasing = TRUE)
+sorted_biopsy_variances <- sort(biopsy_variances, decreasing = TRUE)
+
+# Select top 50 variables excluding Outcome which is the dependent variable
+blood_selected <- names(sorted_blood_variances)[1:52]
+blood_selected <- blood_selected[-c(1,2)]
+biopsy_selected <- names(sorted_biopsy_variances)[1:50]
+
+blood_selected <- c(blood_selected, "Outcome")
+biopsy_selected <- c(biopsy_selected, "Outcome")
+
+#blood_selected
+#biopsy_selected
+
+df_blood_b <- df_blood[blood_selected]
+df_biopsy_b <- df_biopsy[biopsy_selected]
+dim(df_blood_b)
+dim(df_biopsy_b)
+```
+
+    As for 2b, my feature selection is to choose the top 50 features with the highest variances. This is because a gene with high variance potentially means that there is a greater chance to differentiate the characteristics between Stable and Rejection after kidney transplant.
+    
+    Selecting high variances' features is a method of feature selection that supported by following research papers. 
+    - "Feature selection for high-dimensional genomic data" by John D. Storey, Robert Tibshirani, and Joel W. Burdick. This paper discusses the use of variance-based feature selection methods for gene expression data. 
+    - "Feature selection for gene expression data: a comprehensive review" by Jiajia Chen, Jinyan Li, and Jieping Ye. This paper provides a comprehensive review of feature selection methods for gene expression data, including variance-based methods.
+    - "Selecting informative genes from microarray data using feature selection methods" by Hui Liu, Zhenqiu Liu, and Xiang-Sun Zhang. This paper presents a comparative study of various feature selection methods for gene expression data, including variance-based methods.
+    - "A comparison of feature selection methods for classification of high-dimensional microarray data" by L. A. Shipp, T. J. Ross, P. Tamayo, A. P. Weng, J. L. Kutok, R. C. Aguiar, M. Gaasenbeek, M. Angelo, M. Reich, G. S. Pinkus, T. S. Ray, M. A. Koval, D. T. Lastavica, A. Norton, T. A. Lister, J. Mesirov, D. S. Neuberg, E. S. Lander, J. C. Aster, and T. R. Golub. This paper compares the performance of various feature selection methods for gene expression data, including variance-based methods, in the context of cancer classification.
+    
+    The reason I did not use the top 50 genes in toptable as feature selection was due to the context of the question. I understood "differentially expressed" as an adjective rather than a proper noun. Therefore, I read through some research papers referenced above and decided to use the top 50 genes with the highest variances as the most "differentially expressed" genes.
+
+```{r}
+blood_selected
+biopsy_selected
+```
+
+    Here are 50 selected features from the entire Blood and Biopsy dataset respectively. Selecting features before splitting the data into training and testing sets is a core characteristic of Framework 1.
+
+
+## Framework 1. Identify the 50 most differentially expressed genes from the entire dataset. Subset the entire dataset to the 50 most differentially expressed genes. Randomly split the data into training and testing sets (80:20 split). Build a SVM classifier on the training set. Calculate the accuracy of the classifier when applied on the testing set.
+
+### GSE46474 Blood Data-set
+```{r, warning=FALSE}
+# Randomly split data into training and testing sets in 80:20 ratio
+set.seed(3888)
+#set.seed(35)
+training_indices <- createDataPartition(df_blood_b$Outcome, p = 0.8, list = FALSE)
+training_set <- df_blood_b[training_indices, ]
+testing_set <- df_blood_b[-training_indices, ]
+```
+
+```{r}
+
+# SVM model with Linear Kernel
+svm_blood_b <- svm(Outcome ~ ., data = training_set, kernel = "linear")
+
+# The predicted results
+print(predicted <- predict(svm_blood_b, newdata = testing_set))
+
+# Accuracy of the SVM model indicating by the testing set
+print(accuracy <- mean(predicted == testing_set$Outcome))
+```
+
+```{r}
+# 50 repeats of 5-folds Cross Validation
+ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 50)
+
+# Train the SVM model using the repeated cross-validation
+svm_linear <- train(Outcome ~ ., data = df_blood_b, method = "svmLinear", trControl = ctrl, tuneLength = 5)
+
+#svm_polynomial <- train(Outcome ~ ., data = df_blood_b, method = "svmPoly", trControl = ctrl, tuneLength = 10)
+
+#svm_radial <- train(Outcome ~ ., data = df_blood_b, method = "svmRadial", trControl = ctrl, tuneLength = 10)
+
+# Model Results
+svm_linear
+#svm_polynomial
+#svm_radial
+
+```
+
+```{r}
+
+# Set up cross-validation parameters
+n_repeats <- 50
+n_folds <- 5
+train_control <- trainControl(method = "repeatedcv", number = n_folds, repeats = n_repeats)
+
+# Create empty vector to store accuracies
+accuracies <- rep(0, n_repeats)
+
+# Perform cross-validation and store accuracies
+for (i in 1:n_repeats) {
+  set.seed(i) # set seed for reproducibility
+  svm_model <- train(Outcome ~ ., data = df_blood_b, method = "svmLinear", trControl = train_control)
+  accuracies[i] <- svm_model$results$Accuracy[1]
+}
+
+# Plot results as boxplots and histograms
+par(mfrow=c(1,2))
+boxplot(accuracies, main="Accuracy", ylab="Value")
+hist(accuracies, main="Accuracy")
+
+```
+    
+    
+    In the 50 iterations of 5-fold cross-validation, the SVM model with a linear kernel resulted in an average accuracy of 66%, as shown by the box plot and histogram. This level of accuracy is not considered good performance. Using SVM models with polynomial or radial kernels might lead to better performance since they offer more complexity, but they require more computational power to train and test.
+
+
+### GSE138043 Biopsy Data-set
+```{r}
+set.seed(3888)
+
+training_indices <- createDataPartition(df_biopsy_b$Outcome, p = 0.8, list = FALSE)
+training_set <- df_biopsy_b[training_indices, ]
+testing_set <- df_biopsy_b[-training_indices, ]
+```
+
+```{r}
+
+# SVM model with Linear Kernel
+svm_biopsy_b <- svm(Outcome ~ ., data = training_set, kernel = "linear")
+
+# The predicted results
+print(predicted <- predict(svm_biopsy_b, newdata = testing_set))
+
+# Accuracy of the SVM model indicating by the testing set
+print(accuracy <- mean(predicted == testing_set$Outcome))
+```
+
+```{r}
+# 50 repeats of 5-folds Cross Validation
+ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 50)
+
+# Train the SVM model using the repeated cross-validation
+svm_linear <- train(Outcome ~ ., data = df_biopsy_b, method = "svmLinear", trControl = ctrl, tuneLength = 10)
+
+#svm_polynomial <- train(Outcome ~ ., data = df_blood_b, method = "svmPoly", trControl = ctrl, tuneLength = 10)
+
+#svm_radial <- train(Outcome ~ ., data = df_blood_b, method = "svmRadial", trControl = ctrl, tuneLength = 10)
+
+# Model Results
+svm_linear
+#svm_polynomial
+#svm_radial
+
+```
+
+```{r}
+# Set up cross-validation parameters
+n_repeats <- 50
+n_folds <- 5
+train_control <- trainControl(method = "repeatedcv", number = n_folds, repeats = n_repeats)
+
+# Create empty vector to store accuracies
+accuracies <- rep(0, n_repeats)
+
+# Perform cross-validation and store accuracies
+for (i in 1:n_repeats) {
+  set.seed(i) # set seed for reproducibility
+  svm_model <- train(Outcome ~ ., data = df_biopsy_b, method = "svmLinear", trControl = train_control)
+  accuracies[i] <- svm_model$results$Accuracy[1]
+}
+
+# Plot results as boxplots and histograms
+par(mfrow=c(1,2))
+boxplot(accuracies, main="Accuracy", ylab="Value")
+hist(accuracies, main="Accuracy")
+```
+
+
+    In the 50 iterations of 5-fold cross-validation, the SVM model with a linear kernel resulted in an average accuracy of 69%, as shown by the box plot and histogram. This level of accuracy is also not considered good performance, but it is slightly better than the performance when predicting with the blood dataset.
+    Regarding Framework 1, the conclusion is that the biopsy dataset is better suited to predict the occurrence of rejection after a kidney transplant for a particular patient than the blood dataset.
+    
+
+## c. Consider the following framework for cross-validation for a support vector machine (SVM) classifier.
+## Framework 2. Randomly split the entire dataset into training and testing sets (80:20 split). Identify the 50 most differentially expressed genes from the training data. Subset both the training and testing data to the 50 most differentially expressed genes. Build a SVM classifier on the training set. Calculate the accuracy of the classifier when applied on the testing set.
+### GSE46474 Blood Data-set
+```{r}
+set.seed(3888)
+#set.seed(9527)
+
+# Split the blood data-set into 80:20 ratio
+
+trainIndex <- createDataPartition(df_blood$Outcome, p = 0.8, list = FALSE)
+trainData <- df_blood[trainIndex, ]
+testData <- df_blood[-trainIndex, ]
+
+dim(trainData)
+dim(testData)
+
+```
+
+```{r, warning=FALSE}
+
+# Feature Selection on the spited training set
+
+# Calculate variances for each numerical variable
+blood_variances <- apply(trainData[, -which(names(trainData) == "Outcome")], 2, var, na.rm = TRUE)
+
+# Sort variables by variance in descending order
+sorted_blood_variances <- sort(blood_variances, decreasing = TRUE)
+
+# Select top 50 variables excluding Outcome which is the dependent variable
+blood_selected <- names(sorted_blood_variances)[1:52]
+blood_selected <- blood_selected[-c(1,2)]
+blood_selected <- c(blood_selected, "Outcome")
+
+trainData <- trainData[blood_selected]
+testData <- testData[blood_selected]
+dim(trainData)
+dim(testData)
+
+```
+
+```{r}
+blood_selected
+```
+
+    Here are 50 selected features from the training set of data-set (80% of the entire data-set). Selecting features after splitting the data into training and testing sets is a core characteristic of Framework 2.
+
+```{r}
+# SVM model with Linear Kernel
+svm_blood_c <- svm(Outcome ~ ., data = trainData, kernel = "linear")
+
+# The predicted results
+print(predicted <- predict(svm_blood_c, newdata = testData))
+
+# Accuracy of the SVM model indicating by the testing set
+print(accuracy <- mean(predicted == testData$Outcome))
+```
+
+```{r}
+# 50 repeats of 5-folds Cross Validation
+ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 50)
+
+# Aggreate the pre-splited training and testing sets for the following cross validation
+cv_blood <- rbind(trainData, testData)
+
+# Train the SVM model using the repeated cross-validation
+svm_linear <- train(Outcome ~ ., data = cv_blood, method = "svmLinear", trControl = ctrl, tuneLength = 5)
+
+# Model Results
+svm_linear
+
+```
+
+```{r}
+# Set up cross-validation parameters
+n_repeats <- 50
+n_folds <- 5
+train_control <- trainControl(method = "repeatedcv", number = n_folds, repeats = n_repeats)
+
+# Create empty vector to store accuracies
+accuracies <- rep(0, n_repeats)
+
+# Perform cross-validation and store accuracies
+for (i in 1:n_repeats) {
+  set.seed(i) # set seed for reproducibility
+  svm_model <- train(Outcome ~ ., data = cv_blood, method = "svmLinear", trControl = train_control)
+  accuracies[i] <- svm_model$results$Accuracy[1]
+}
+
+# Plot results as boxplots and histograms
+par(mfrow=c(1,2))
+boxplot(accuracies, main="Accuracy", ylab="Value")
+hist(accuracies, main="Accuracy")
+```
+
+    In the 50 iterations of 5-fold cross-validation, the SVM model with a linear kernel resulted in an average accuracy of 70%, as shown by the box plot and histogram. This level of accuracy is not considered good performance.
+    
+
+### GSE138043 Biopsy Data-set
+```{r}
+set.seed(3888)
+
+# Split the blood data-set into 80:20 ratio
+
+trainIndex <- createDataPartition(df_biopsy$Outcome, p = 0.8, list = FALSE)
+trainData <- df_biopsy[trainIndex, ]
+testData <- df_biopsy[-trainIndex, ]
+
+dim(trainData)
+dim(testData)
+```
+```{r, warning=FALSE}
+# Feature Selection on the spited training set
+
+# Calculate variances for each numerical variable
+biopsy_variances <- apply(trainData[, -which(names(trainData) == "Outcome")], 2, var, na.rm = TRUE)
+
+# Sort variables by variance in descending order
+sorted_biopsy_variances <- sort(biopsy_variances, decreasing = TRUE)
+
+# Select top 50 variables excluding Outcome which is the dependent variable
+biopsy_selected <- names(sorted_biopsy_variances)[1:50]
+biopsy_selected <- c(biopsy_selected, "Outcome")
+
+trainData <- trainData[biopsy_selected]
+testData <- testData[biopsy_selected]
+dim(trainData)
+dim(testData)
+```
+```{r}
+biopsy_selected
+```
+
+    Here are 50 selected features from the training set of data-set (80% of the entire data-set). Selecting features after splitting the data into training and testing sets is a core characteristic of Framework 2.
+
+
+```{r}
+# SVM model with Linear Kernel
+svm_biopsy_c <- svm(Outcome ~ ., data = trainData, kernel = "linear")
+
+# The predicted results
+print(predicted <- predict(svm_biopsy_c, newdata = testData))
+
+# Accuracy of the SVM model indicating by the testing set
+print(accuracy <- mean(predicted == testData$Outcome))
+```
+```{r}
+# 50 repeats of 5-folds Cross Validation
+ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 50)
+
+# Aggreate the pre-splited training and testing sets for the following cross validation
+cv_biopsy <- rbind(trainData, testData)
+
+# Train the SVM model using the repeated cross-validation
+svm_linear <- train(Outcome ~ ., data = cv_blood, method = "svmLinear", trControl = ctrl, tuneLength = 5)
+
+# Model Results
+svm_linear
+```
+```{r}
+# Set up cross-validation parameters
+n_repeats <- 50
+n_folds <- 5
+train_control <- trainControl(method = "repeatedcv", number = n_folds, repeats = n_repeats)
+
+# Create empty vector to store accuracies
+accuracies <- rep(0, n_repeats)
+
+# Perform cross-validation and store accuracies
+for (i in 1:n_repeats) {
+  set.seed(i) # set seed for reproducibility
+  svm_model <- train(Outcome ~ ., data = cv_biopsy, method = "svmLinear", trControl = train_control)
+  accuracies[i] <- svm_model$results$Accuracy[1]
+}
+
+# Plot results as boxplots and histograms
+par(mfrow=c(1,2))
+boxplot(accuracies, main="Accuracy", ylab="Value")
+hist(accuracies, main="Accuracy")
+```
+
+    In 50 iterations of 5-fold cross-validation, the SVM model with a linear kernel resulted in an average accuracy of 68.5%, as shown by the box plot and histogram. This level of accuracy is not considered good performance.
+
+
+# d. Compare all the results from b and c using an appropriate graphic. Which of framework 1 or framework 2 is more valid? Is using blood or biopsy more accurate? Justify your answers.
+```{r}
+# Create empty vector to store accuracies
+accuracies_fw1_blood <- rep(0, n_repeats)
+accuracies_fw1_biopsy <- rep(0, n_repeats)
+accuracies_fw2_blood <- rep(0, n_repeats)
+accuracies_fw2_biopsy <- rep(0, n_repeats)
+
+# Perform cross-validation and store accuracies
+for (i in 1:n_repeats) {
+  #set.seed(i) # set seed for reproducibility
+  svm_model <- train(Outcome ~ ., data = df_blood_b, method = "svmLinear", trControl = train_control)
+  accuracies_fw1_blood[i] <- svm_model$results$Accuracy[1]
+}
+
+for (i in 1:n_repeats) {
+  #set.seed(i) # set seed for reproducibility
+  svm_model <- train(Outcome ~ ., data = df_biopsy_b, method = "svmLinear", trControl = train_control)
+  accuracies_fw1_biopsy[i] <- svm_model$results$Accuracy[1]
+}
+
+for (i in 1:n_repeats) {
+  #set.seed(i) # set seed for reproducibility
+  svm_model <- train(Outcome ~ ., data = cv_blood, method = "svmLinear", trControl = train_control)
+  accuracies_fw2_blood[i] <- svm_model$results$Accuracy[1]
+}
+
+for (i in 1:n_repeats) {
+  #set.seed(i) # set seed for reproducibility
+  svm_model <- train(Outcome ~ ., data = cv_biopsy, method = "svmLinear", trControl = train_control)
+  accuracies_fw2_biopsy[i] <- svm_model$results$Accuracy[1]
+}
+
+compare_plots <- list(accuracies_fw1_blood, accuracies_fw1_biopsy, accuracies_fw2_blood, accuracies_fw2_biopsy)
+
+boxplot(compare_plots, names = c("FW1 Blood", "FW1 Biopsy", "FW2 Blood", "FW2 Biopsy"), xlab = "Different data-set in different Frameworks", ylab = "Accuracy", main = "Compare different Accuracies")
+```
+
+    This boxplot shows the aggregated performance results of 50 repeats of 5-fold cross-validation for four different cases: Framework 1 with Blood or Biopsy data and Framework 2 with Blood or Biopsy data.
+
+    According to the plot, Framework 2 is more valid than Framework 1 since the medians of predicted accuracies from Framework 2 are higher than those from Framework 1. In Framework 1, the Biopsy data resulted in a higher median of predicted accuracy, while the Blood data resulted in the lowest median predicted accuracy of all cases. In contrast, in Framework 2, the Blood data resulted in the highest median predicted accuracy of all cases, while the Biopsy data resulted in an acceptable accuracy but was slightly worse than in Framework 1. Generally, blood data is better than biopsy in prediction.
+
+    In general, we can conclude that among all four cases, training an SVM model with blood data-set based on Framework 2 and evaluated by 50 repeats of 5-fold cross-validation would perform best with the highest median and maximum accuracy. However, considering the actual situation of kidney transplant, which is an extremely serious and infallible action, a 70% accuracy is far from enough to be applied in medical suggestion or determination. Moreover, simply looking at the predicted accuracy is not enough. In this domain, we must strongly avoid false negatives that predict stability while actually rejecting. We should consciously increase the recall by reasonably sacrificing precision. Tuning the hyperparameters could be helpful in achieving higher recall and accuracy.
+    
+    Using different feature selection methods could potentially improve the model. In both Framework 1 and 2, I selected 50 features with the highest variances as predictors, which was a supportive feature selection method, particularly in the field of gene analysis. Another available feature selection method could be selecting the top 50 features in the "toptable" produced in 2a, which are the 50 features with the lowest p-values in multiple t-tests. The reason I did not use such a method of feature selection was due to the context of the question. I understood "differentially expressed" as an adjective rather than a proper noun. Therefore, I read through some research papers referenced above and decided to use the top 50 genes with the highest variances as the most "differentially expressed" genes.
+    
+    
+# Question 3: Case Study 3 (Brain): Streaming classifier for Brain-box
+## a. Build a classification rule for detecting a series of {L, R} under a streaming condition where the function will take a sequence of signals as an input. Explain how your classification rule works.
+```{r, echo=FALSE, results='hide'}
+eye_movement_ZC = function(Y, time, 
+                           windowSize = 0.5, 
+                           thresholdEvents = 20,
+                           downSampleRate = 50) {
+  
+  ## down sample
+  ind = seq_len(which(time == round(time[length(time)] - windowSize, 4)) + 1)
+  ind = seq(1, ind[length(ind)], by = downSampleRate)
+  
+  ## time vector for middle of each window
+  timeMiddle <- time[ind] + windowSize/2 
+  testStat = rep(NA, length(ind))
+  
+  ## calculate zero-crossings
+  for (i in 1:length(ind)) {
+    Y_subset <- Y[time >= time[ind[i]] & time < time[ind[i]] + windowSize]
+    testStat[i] <- sum(Y_subset[1:(length(Y_subset) - 1)] * Y_subset[2:(length(Y_subset))] <= 0)
+  }
+  
+  ## using threshold to determine eye movement intervals
+  predictedEvent <- which(testStat < thresholdEvents)
+  eventTimes <- timeMiddle[predictedEvent] # map back to the time of this 
+  gaps <- which(diff(eventTimes) > windowSize )
+  
+  ## estimate event_time_interval
+  event_time_interval <- min(eventTimes)
+  for (i in 1:length(gaps)) {
+    event_time_interval <- append(event_time_interval, 
+                                  c(eventTimes[gaps[i]],
+                                    eventTimes[gaps[i] + 1]))
+  }
+  event_time_interval <- append(event_time_interval, max(eventTimes))
+  event_time_interval <- matrix(event_time_interval, ncol = 2, byrow = TRUE)
+  
+  predictedEventTimes <- rep(FALSE, length(Y))
+  for (i in 1:nrow(event_time_interval)) {
+    predictedEventTimes[event_time_interval[i, 1] <= time & event_time_interval[i, 2] >= time] <- TRUE
+  }
+  
+  num_event <- length(gaps) + 1
+  return(list(num_event = num_event, 
+              predictedEventTimes = predictedEventTimes,
+              predictedInterval = event_time_interval))
+}
+```
+
+```{r, warning=FALSE, results='hide'}
+
+set.seed(3888)
+
+# Read in data
+dir_short <- "zoe_spiker/Length3"
+all_files_short <- list.files(dir_short)
+wave_file_short <- list()
+for (i in all_files_short) {
+  ## cat(paste0(i, "...", "\n"))
+  wave_file_short[[i]] <- tuneR::readWave(file.path(dir_short, i))
+}
+
+dir_length8 <- "zoe_spiker/Length8"
+all_files_length8 <- list.files(dir_length8)
+wave_file_length8 <- list()
+for (i in all_files_length8) {
+  ## cat(paste0(i, "...", "\n"))
+  wave_file_length8[[i]] <- tuneR::readWave(file.path(dir_length8, i))
+}
+
+dir_long <- "zoe_spiker/Long"
+all_files_long <- list.files(dir_long)
+wave_file_long <- list()
+for (i in all_files_long) {
+  ## cat(paste0(i, "...", "\n"))
+  wave_file_long[[i]] <- tuneR::readWave(file.path(dir_long, i))
+}
+
+wave_file_agg <- append(append(wave_file_short, wave_file_length8), wave_file_long)
+
+LR_detection = function(seq) {
+  maxval = which.max(seq)
+  minval = which.min(seq)
+  movement = ifelse(maxval < minval,  "L", "R")
+  return(movement)
+}
+
+streaming_classifier <- function(wave_file, window_size = wave_file@samp.rate, increment = window_size/3, threshold_events = 30) {
+  # Extract left channel and time values
+  Y <- wave_file@left
+  xtime <- seq_len(length(Y)) / wave_file@samp.rate
+  
+  # Initialize variables
+  predicted_labels <- numeric()
+  predicted_times <- numeric()
+  lower_interval <- 1
+  max_time <- max(xtime) * window_size
+  
+  # Loop through intervals
+  while (max_time > lower_interval + window_size) {
+    upper_interval <- lower_interval + window_size
+    interval <- Y[lower_interval:upper_interval]
+    
+    # Compute test statistic
+    test_stat <- sum(interval[-length(interval)] * interval[-1] <= 0)  # Zero-crossing
+    
+    # Make prediction
+    if (test_stat < threshold_events) {
+      predicted <- LR_detection(interval)
+      predicted_labels <- c(predicted_labels, predicted)
+      predicted_times <- c(predicted_times, lower_interval + window_size / 2)
+      lower_interval <- lower_interval + window_size
+    } else {
+      lower_interval <- lower_interval + increment
+    }
+  }
+  
+  # Return predicted labels
+  return(predicted_labels)
+}
+```
+
+```{r}
+# Test the Streaming Classifier
+
+streaming_classifier(wave_file_agg$LLL_z3.wav)
+streaming_classifier(wave_file_agg$LLRLRLRL_z.wav)
+streaming_classifier(wave_file_agg$LLLRLLLRLRRLRRRLRLLL_Z.wav)
+```
+
+    The function streaming classifier is a classifier designed to classify eye movements in a streaming fashion. The function takes as input a wave file containing audio data, and parameters such as the window size, increment, and threshold for event detection.
+
+    Streaming classifier works by first extracting the left channel and time values from the input wave file. It then initializes variables for storing predicted labels and times, as well as for defining the lower and upper intervals of the streaming data.
+
+    The function then loops through each interval, with the size of the interval defined by the window size parameter. Within each interval, the function computes a test statistic based on the number of zero crossings in the interval. If the number of zero crossings is below the threshold for event detection, the function makes a prediction using the LR detection function, and stores the predicted label and time. If the number of zero crossings is above the threshold, the function skips ahead to the next interval by increasing the lower interval by the increment parameter. The LR detection is based on a very simple rule of classification. It extracts the maximum and minimum values in a sequence over a period and compares their absolute values. If the maximum absolute value of the signal over a period is less than the minimum absolute value of the signal, it indicates a left movement. Otherwise, a right movement is indicated.
+
+    Finally, the function returns the predicted labels for each interval.
+
+    In summary, the streaming classifier function is a streaming classifier that takes in audio data and makes predictions for eye movements by computing zero crossings and using a threshold to determine when to make predictions. The function is designed to work in a streaming fashion, where data is processed in real-time as it becomes available.
+
+    However, this streaming classifier is quite simplistic for such a complex project. As demonstrated by the three predictive samples above, the classifier has low accuracies.
+
+## b. Create a metric to estimate the accuracy of your classifier on the length 3 wave files, justifying your choice. Comment on the performance of your classifier (ie. is it reasonable for this context?).
+```{r, echo=FALSE, results='hide'}
+y_labels <- names(wave_file_agg)
+
+remove_after_underscore <- function(x) {
+  sub("_.*", "", x)
+}
+
+y_labels <- lapply(y_labels, remove_after_underscore)
+
+remove_after_underscore <- function(x) {
+  sub("_.*", "", x)
+}
+
+y_labels <- list()
+
+for (col in names(wave_file_agg)) {
+  col <- lapply(col, remove_after_underscore)
+  y_labels <- c(y_labels, col)
+}
+
+y_labels <- as.list(y_labels)
+
+# create a list to store the results
+results_list <- list()
+
+# iterate through each variable in wave_file_agg
+for (filename in names(wave_file_agg)) {
+  # apply the streaming_classifier() function to the current file
+  result <- streaming_classifier(wave_file_agg[[filename]])
+  
+  # store the result in the results_list
+  results_list[[filename]] <- result
+}
+
+results_list <- unname(results_list)
+
+for(i in 1:length(results_list)){
+  results_list[[i]] <- paste(results_list[[i]], collapse = "")
+}
+```
+
+```{r}
+True = 0
+False = 0
+
+y_labels <- y_labels[1:24]
+results_list <- results_list[1:24]
+
+for (i in 1:length(y_labels)){
+  if (results_list[[i]] == y_labels[[i]]){
+    True = True + 1
+  }else{
+    False = False + 1
+  }
+  print(paste("Compare the predictied results: ", results_list[[i]]))
+  print(paste("with the actual results: ", y_labels[[i]]))
+}
+
+print(paste("Total amount of correct prediction on length 3 signals by the streaming classifier: ", True))
+print(paste("Total amount of wrong prediction on length 3 singals by the streaming classifier: ", False))
+print(paste("The accuracy of the streaming classifer by preidicting length 3 singals is: ", True/length(y_labels)))
+```
+
+    As shown in the metric above, the streaming classifier correctly predicted six files with three signals, but wrongly predicted 18 files with three signals. Therefore, the accuracy of the streaming classifier on predicting three signals is only 25%, which is considered extremely poor. As previously mentioned, the complexity of the streaming classifier is not sufficient to handle such a signal classification task. Additionally, the "hyperparameters" of the streaming classifier could be better tuned, such as the window size, threshold, and increment value.
+
+## c. Compare at least four different classification rules on the length 3 wave files, using the metric you created. (This may include changing the parameters, different rules to identify events from non-events, or different rules to identify left-movement from right-movement). What is your best model? Justify your answer with appropriate visualisations.
+```{r, echo=FALSE}
+# Create the second streaming classifier with different increment value and thresholde
+
+streaming_classifier_2 <- function(wave_file, window_size = wave_file@samp.rate, increment = window_size/0.75, threshold_events = 75) {
+  # Extract left channel and time values
+  Y <- wave_file@left
+  xtime <- seq_len(length(Y)) / wave_file@samp.rate
+  
+  # Initialize variables
+  predicted_labels <- numeric()
+  predicted_times <- numeric()
+  lower_interval <- 1
+  max_time <- max(xtime) * window_size
+  
+  # Loop through intervals
+  while (max_time > lower_interval + window_size) {
+    upper_interval <- lower_interval + window_size
+    interval <- Y[lower_interval:upper_interval]
+    
+    # Compute test statistic
+    test_stat <- sum(interval[-length(interval)] * interval[-1] <= 0)  # Zero-crossing
+    
+    # Make prediction
+    if (test_stat < threshold_events) {
+      predicted <- LR_detection(interval)
+      predicted_labels <- c(predicted_labels, predicted)
+      predicted_times <- c(predicted_times, lower_interval + window_size / 2)
+      lower_interval <- lower_interval + window_size
+    } else {
+      lower_interval <- lower_interval + increment
+    }
+  }
+  
+  # Return predicted labels
+  return(predicted_labels)
+}
+```
+
+```{r}
+
+# create a list to store the results
+results_list <- list()
+
+# iterate through each variable in wave_file_agg
+for (filename in names(wave_file_agg)) {
+  # apply the streaming_classifier() function to the current file
+  result <- streaming_classifier_2(wave_file_agg[[filename]])
+  
+  # store the result in the results_list
+  results_list[[filename]] <- result
+}
+
+results_list <- unname(results_list)
+
+for(i in 1:length(results_list)){
+  results_list[[i]] <- paste(results_list[[i]], collapse = "")
+}
+
+True = 0
+False = 0
+
+y_labels <- y_labels[1:24]
+results_list <- results_list[1:24]
+
+for (i in 1:length(y_labels)){
+  if (results_list[[i]] == y_labels[[i]]){
+    True = True + 1
+  }else{
+    False = False + 1
+  }
+  print(paste("Compare the predictied results: ", results_list[[i]]))
+  print(paste("with the actual results: ", y_labels[[i]]))
+}
+
+print(paste("Total amount of correct prediction on length 3 signals by the streaming classifier 2: ", True))
+print(paste("Total amount of wrong prediction on length 3 singals by the streaming classifier 2: ", False))
+print(paste("The accuracy of the streaming classifer 2 by preidicting length 3 singals is: ", True/length(y_labels)))
+```
+
+```{r, echo=FALSE}
+# Create the third streaming classifier with different increment value and threshold
+
+streaming_classifier_3 <- function(wave_file, window_size = wave_file@samp.rate, increment = window_size/50, threshold_events = 35) {
+  # Extract left channel and time values
+  Y <- wave_file@left
+  xtime <- seq_len(length(Y)) / wave_file@samp.rate
+  
+  # Initialize variables
+  predicted_labels <- numeric()
+  predicted_times <- numeric()
+  lower_interval <- 1
+  max_time <- max(xtime) * window_size
+  
+  # Loop through intervals
+  while (max_time > lower_interval + window_size) {
+    upper_interval <- lower_interval + window_size
+    interval <- Y[lower_interval:upper_interval]
+    
+    # Compute test statistic
+    test_stat <- sum(interval[-length(interval)] * interval[-1] <= 0)  # Zero-crossing
+    
+    # Make prediction
+    if (test_stat < threshold_events) {
+      predicted <- LR_detection(interval)
+      predicted_labels <- c(predicted_labels, predicted)
+      predicted_times <- c(predicted_times, lower_interval + window_size / 2)
+      lower_interval <- lower_interval + window_size
+    } else {
+      lower_interval <- lower_interval + increment
+    }
+  }
+  
+  # Return predicted labels
+  return(predicted_labels)
+}
+```
+
+```{r}
+
+# create a list to store the results
+results_list <- list()
+
+# iterate through each variable in wave_file_agg
+for (filename in names(wave_file_agg)) {
+  # apply the streaming_classifier() function to the current file
+  result <- streaming_classifier_3(wave_file_agg[[filename]])
+  
+  # store the result in the results_list
+  results_list[[filename]] <- result
+}
+
+results_list <- unname(results_list)
+
+for(i in 1:length(results_list)){
+  results_list[[i]] <- paste(results_list[[i]], collapse = "")
+}
+
+True = 0
+False = 0
+
+y_labels <- y_labels[1:24]
+results_list <- results_list[1:24]
+
+for (i in 1:length(y_labels)){
+  if (results_list[[i]] == y_labels[[i]]){
+    True = True + 1
+  }else{
+    False = False + 1
+  }
+  print(paste("Compare the predictied results: ", results_list[[i]]))
+  print(paste("with the actual results: ", y_labels[[i]]))
+}
+
+print(paste("Total amount of correct prediction on length 3 signals by the streaming classifier 3: ", True))
+print(paste("Total amount of wrong prediction on length 3 singals by the streaming classifier 3: ", False))
+print(paste("The accuracy of the streaming classifer 3 by preidicting length 3 singals is: ", True/length(y_labels)))
+```
+
+```{r, echo=FALSE}
+# Create the third streaming classifier with different increment value and threshold
+
+streaming_classifier_4 <- function(wave_file, window_size = wave_file@samp.rate, increment = window_size/50, threshold_events = 25) {
+  # Extract left channel and time values
+  Y <- wave_file@left
+  xtime <- seq_len(length(Y)) / wave_file@samp.rate
+  
+  # Initialize variables
+  predicted_labels <- numeric()
+  predicted_times <- numeric()
+  lower_interval <- 1
+  max_time <- max(xtime) * window_size
+  
+  # Loop through intervals
+  while (max_time > lower_interval + window_size) {
+    upper_interval <- lower_interval + window_size
+    interval <- Y[lower_interval:upper_interval]
+    
+    # Compute test statistic
+    test_stat <- sum(interval[-length(interval)] * interval[-1] <= 0)  # Zero-crossing
+    
+    # Make prediction
+    if (test_stat < threshold_events) {
+      predicted <- LR_detection(interval)
+      predicted_labels <- c(predicted_labels, predicted)
+      predicted_times <- c(predicted_times, lower_interval + window_size / 2)
+      lower_interval <- lower_interval + window_size
+    } else {
+      lower_interval <- lower_interval + increment
+    }
+  }
+  
+  # Return predicted labels
+  return(predicted_labels)
+}
+
+# create a list to store the results
+results_list <- list()
+
+# iterate through each variable in wave_file_agg
+for (filename in names(wave_file_agg)) {
+  # apply the streaming_classifier() function to the current file
+  result <- streaming_classifier_4(wave_file_agg[[filename]])
+  
+  # store the result in the results_list
+  results_list[[filename]] <- result
+}
+```
+
+```{r}
+
+results_list <- unname(results_list)
+
+for(i in 1:length(results_list)){
+  results_list[[i]] <- paste(results_list[[i]], collapse = "")
+}
+
+True = 0
+False = 0
+
+y_labels <- y_labels[1:24]
+results_list <- results_list[1:24]
+
+for (i in 1:length(y_labels)){
+  if (results_list[[i]] == y_labels[[i]]){
+    True = True + 1
+  }else{
+    False = False + 1
+  }
+  print(paste("Compare the predictied results: ", results_list[[i]]))
+  print(paste("with the actual results: ", y_labels[[i]]))
+}
+
+print(paste("Total amount of correct prediction on length 3 signals by the streaming classifier 4: ", True))
+print(paste("Total amount of wrong prediction on length 3 singals by the streaming classifier 4: ", False))
+print(paste("The accuracy of the streaming classifer 4 by preidicting length 3 singals is: ", True/length(y_labels)))
+```
+
+```{r}
+# Define custom values and labels
+my_values <- c(0.25, 0.08, 0.33, 0.5)
+my_labels <- c("Classifier 1", "Classifier 2", "Classifier 3", "Classifier 4")
+
+# Create bar plot with custom labels
+barplot(my_values, names.arg = my_labels, main = "Compare 4 Streaming Classifiers with different hypermeters")
+
+```
+
+    Four classifiers have been created and tested, all of them are streaming classifiers which follow the same classification rules on left or right movements as event or non-event. The tested accuracies are shown in the bar plot above which indicates that Classifier 4 with an increment value equal to wave sample rate/50, and a threshold of events equal to 25 resulted in the highest accuracy among all four classifiers, with a 50% accuracy on signal prediction with length 3.
+
+    While 50% accuracy does not indicate good performance, it was not a binary classification task, so 50% does not mean the classifier randomly guessed the outcome. Our classifiers performed poorly, but they have a correct and logical mechanism.
+
+
+## d. For the best model that you found in part c, evaluate its performance on sequences of varying lengths. Does the length of the sequence have an impact on the classification accuracy? Justify your answer with appropriate visualisations.
+```{r}
+y_labels <- names(wave_file_agg)
+
+remove_after_underscore <- function(x) {
+  sub("_.*", "", x)
+}
+
+y_labels <- lapply(y_labels, remove_after_underscore)
+
+remove_after_underscore <- function(x) {
+  sub("_.*", "", x)
+}
+
+y_labels <- list()
+
+for (col in names(wave_file_agg)) {
+  col <- lapply(col, remove_after_underscore)
+  y_labels <- c(y_labels, col)
+}
+
+y_labels <- as.list(y_labels)
+
+# create a list to store the results
+results_list <- list()
+
+# iterate through each variable in wave_file_agg
+for (filename in names(wave_file_agg)) {
+  # apply the streaming_classifier() function to the current file
+  result <- streaming_classifier(wave_file_agg[[filename]])
+  
+  # store the result in the results_list
+  results_list[[filename]] <- result
+}
+
+results_list <- unname(results_list)
+
+for(i in 1:length(results_list)){
+  results_list[[i]] <- paste(results_list[[i]], collapse = "")
+}
+```
+
+```{r}
+# Use the classifier with the best performance to classify medium and long signals.
+
+# create a list to store the results
+results_list <- list()
+
+# iterate through each variable in wave_file_agg
+for (filename in names(wave_file_agg)) {
+  # apply the streaming_classifier() function to the current file
+  result <- streaming_classifier_4(wave_file_agg[[filename]])
+  
+  # store the result in the results_list
+  results_list[[filename]] <- result
+}
+
+results_list <- unname(results_list)
+
+for(i in 1:length(results_list)){
+  results_list[[i]] <- paste(results_list[[i]], collapse = "")
+}
+
+True = 0
+False = 0
+
+y_labels <- y_labels[25:31]
+results_list <- results_list[25:31]
+
+for (i in 1:length(y_labels)){
+  if (results_list[[i]] == y_labels[[i]]){
+    True = True + 1
+  }else{
+    False = False + 1
+  }
+  print(paste("Compare the predictied results: ", results_list[[i]]))
+  print(paste("with the actual results: ", y_labels[[i]]))
+}
+
+print(paste("Total amount of correct prediction on medium and long signals by the streaming classifier 4: ", True))
+print(paste("Total amount of wrong prediction on medium and long singals by the streaming classifier 4: ", False))
+print(paste("The accuracy of the streaming classifer 4 by preidicting medium and long singals is: ", True/length(y_labels)))
+```
+
+    As shown in the results above, the best classifier among the four streaming classifiers for predicting signals with a length of 3 failed to predict the direction of movements with a length of 8 and longer signals, resulting in zero predicted accuracy. However, the classifier correctly predicted most of the amounts of movements, and the lengths of the predicted results were equal to the lengths of the actual movements, which showed a good aspect of our classifier.
+
+# References
+
+    Plotly R Open Source Graphing Library: Instructions for creating an interactive geo-spatial plot with Plotly, which were eventually plotted using "ggplotly" instead. Available at https://plotly.com/r/.
+
+    DATA3888_2023 Lab: Week 1: Partial sample codes for using 50 repeats 5-folds CV in Question 2b and 2c. Available at https://canvas.sydney.edu.au/files/29637976?fd_cookie_set=1.
+
+    DATA3888_2023 Lab: Week 2 - Biomedical Data Analysis: Partial sample codes for R.Data import, toptable formation, feature extraction, and SVM model in Question 2a, 2b, and 2c. Available at https://canvas.sydney.edu.au/courses/47683/pages/week-2-omics?module_item_id=1870825.
+
+    DATA3888_2023 Lab: Week 3 - Brain Box Data Analytics: Partial sample codes for wave data import, generating training data, movement extraction function, and the skeleton codes of streaming classifier while loops in Question 3a. Available at https://canvas.sydney.edu.au/courses/47683/pages/week-3-brainbox?module_item_id=1870824.
+
+    Liu, H., Liu, Z., & Zhang, X. S. (2009). Selecting informative genes from microarray data using feature selection methods. BMC bioinformatics, 10(Suppl 1), S6. The paper discusses the method of feature selection to select the top 50 most differentially expressed genes. Available at https://link.springer.com/article/10.1007/s10015-008-0534-4.
+
+    Datacamp: Support Vector Machine in R. Provides an understanding of the mechanism of SVM with linear and non-linear kernels. Available at https://www.datacamp.com/tutorial/support-vector-machines-r.
+
+    Techvidvan: SVM in R for Data Classification using e1071 Package. Provides skeleton codes for SVM model. Available at https://techvidvan.com/tutorials/svm-in-r/.
+
+    Stefanowski, J., & Brzezinski, D. (2008). Streaming Classification. The paper discusses the mechanism of a basic streaming classifier. Available at http://www.cs.put.poznan.pl/dbrzezinski/publications/Stream_Classification.pdf.
+
+    StackOverflow: Found solutions for several bugs in SVM model training and cross-validation.
+
+    GitHub: Found solutions for several bugs in streaming function and the streaming classifier evaluations, particularly solving the logical errors in the for loops and while loops.
